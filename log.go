@@ -7,19 +7,19 @@ import (
 )
 
 type Logger interface {
-	Info(string)
-	Error(string)
+	Info(...interface{})
+	Error(...interface{})
 }
 
 type ConsoleOutput struct {
 }
 
-func (co *ConsoleOutput) Info(content string) {
-	co.output("INFO", content)
+func (co *ConsoleOutput) Info(contents ...interface{}) {
+	co.output("INFO", fmt.Sprintln(contents...))
 }
 
-func (co *ConsoleOutput) Error(content string) {
-	co.output("ERROR", content)
+func (co *ConsoleOutput) Error(contents ...interface{}) {
+	co.output("ERROR", fmt.Sprintln(contents...))
 }
 
 func (co *ConsoleOutput) output(level string, content string) {
