@@ -83,6 +83,7 @@ func (r Rabbit) NewClient() *Client {
 
 type MessageProcessor interface {
 	Process([]byte) error
+	GetTag() string
 }
 
 type Client struct {

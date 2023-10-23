@@ -9,6 +9,7 @@ import (
 
 type MQConsume interface {
 	RunConsume() error
+	GetTag() string
 }
 
 type MQBase struct {
@@ -43,7 +44,11 @@ func (m *MQBase) Run() {
 				var (
 					wg     = &sync.WaitGroup{}
 					mcName = reflect.TypeOf(mc).Elem().Name()
+					mcTag  = mc.GetTag()
 				)
+				if mcTag != "" {
+					mcName = fmt.Sprintf("%s-%s", mcName, mc.GetTag())
+				}
 				for {
 					wg.Add(1)
 					//消费者子协程Panic,Err 退出后重启

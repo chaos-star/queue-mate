@@ -23,6 +23,10 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 		return
 	}
 	mcName := reflect.TypeOf(c.proc).Elem().Name()
+	mcTag := c.proc.GetTag()
+	if mcTag == "" {
+		mcName = fmt.Sprintf("%s-%s", mcName, mcTag)
+	}
 
 	if exchangeType != "topic" && exchangeType != "direct" && exchangeType != "fanout" {
 		err = errors.New("other modes are not supported")
