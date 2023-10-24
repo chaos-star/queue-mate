@@ -24,6 +24,11 @@ type Rabbit struct {
 	connections *ConnectionPool
 }
 
+type Option struct {
+	Tag  string
+	Args interface{}
+}
+
 func NewRabbit(host string, port int, username, password, vhost string, maxIdle int, maxLifeTime time.Duration, timeout time.Duration, logger Logger) *Rabbit {
 	if logger == nil {
 		logger = new(ConsoleOutput)
@@ -83,7 +88,6 @@ func (r Rabbit) NewClient() *Client {
 
 type MessageProcessor interface {
 	Process([]byte) error
-	GetTag() string
 }
 
 type Client struct {
@@ -92,6 +96,7 @@ type Client struct {
 	username    string
 	password    string
 	vhost       string
+	option      Option
 	Topic       ExType
 	Direct      ExType
 	Fanout      ExType
@@ -131,7 +136,13 @@ func (c *Client) Retry(num int) *Client {
 	return c
 }
 
-func (c *Client) Use(proc MessageProcessor) *Client {
+func (c *Client) Use(proc MessageProcessor, option Option) *Client {
 	c.proc = proc
+	c.option = option
+	return c
+}
+
+func (c *Client) UseOption(option Option) *Client {
+	c.option = option
 	return c
 }

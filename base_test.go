@@ -20,9 +20,15 @@ var rabbit = NewRabbit(
 type TestConsume struct {
 }
 
-func (t *TestConsume) RunConsume() (err error) {
+func (t *TestConsume) GetOptions() []Option {
+	var options []Option
+	options = append(options, Option{"test", nil})
+	return options
+}
+
+func (t *TestConsume) RunConsume(option Option) (err error) {
 	client := rabbit.NewClient()
-	err = client.Use(t).Receive(client.Fanout, "ex_test_exchange", nil, "qx_test_queue")
+	err = client.Use(t, option).Receive(client.Fanout, "ex_test_exchange", nil, "qx_test_queue")
 	return
 }
 

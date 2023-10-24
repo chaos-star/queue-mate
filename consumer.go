@@ -23,9 +23,8 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 		return
 	}
 	mcName := reflect.TypeOf(c.proc).Elem().Name()
-	mcTag := c.proc.GetTag()
-	if mcTag == "" {
-		mcName = fmt.Sprintf("%s-%s", mcName, mcTag)
+	if c.option.Tag != "" {
+		mcName = fmt.Sprintf("%s-%s", mcName, c.option.Tag)
 	}
 
 	if exchangeType != "topic" && exchangeType != "direct" && exchangeType != "fanout" {

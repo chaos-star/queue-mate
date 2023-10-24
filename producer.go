@@ -68,6 +68,10 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 		msg,
 	)
 
-	c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [MSG] %s", exchangeName, routeKey, string(body)))
+	if c.option.Tag != "" {
+		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [%s] [MSG] %s", c.option.Tag, exchangeName, routeKey, string(body)))
+	} else {
+		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [MSG] %s", exchangeName, routeKey, string(body)))
+	}
 	return
 }
