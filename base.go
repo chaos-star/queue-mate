@@ -50,8 +50,8 @@ func (m *MQBase) Run() {
 						wg     = &sync.WaitGroup{}
 						mcName = reflect.TypeOf(mc).Elem().Name()
 					)
-					if option.Tag != "" {
-						mcName = fmt.Sprintf("%s-%s", mcName, option.Tag)
+					if op.Tag != "" {
+						mcName = fmt.Sprintf("%s-%s", mcName, op.Tag)
 					}
 					for {
 						wg.Add(1)
@@ -66,7 +66,7 @@ func (m *MQBase) Run() {
 							}()
 							//启动消费者协程
 							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
-							err := mc.RunConsume(option)
+							err := mc.RunConsume(op)
 							if err != nil {
 								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 							}
