@@ -42,7 +42,6 @@ func (m *MQBase) Run() {
 			go func(mc MQConsume) {
 				//断开重试逻辑
 				var (
-					wg      = &sync.WaitGroup{}
 					mcName  = reflect.TypeOf(mc).Elem().Name()
 					options = mc.GetOptions()
 				)
@@ -53,30 +52,35 @@ func (m *MQBase) Run() {
 					if option.Tag != "" {
 						mcName = fmt.Sprintf("%s-%s", mcName, option.Tag)
 					}
-					for {
-						wg.Add(1)
-						//消费者子协程Panic,Err 退出后重启
-						go func(wg *sync.WaitGroup) {
-							defer func() {
-								//处理Panic
-								if x := recover(); x != nil {
-									m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] [RUN] Exception:%#v", mcName, x))
+					go func() {
+						var (
+							wg = &sync.WaitGroup{}
+						)
+						for {
+							wg.Add(1)
+							//消费者子协程Panic,Err 退出后重启
+							go func(wg *sync.WaitGroup) {
+								defer func() {
+									//处理Panic
+									if x := recover(); x != nil {
+										m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] [RUN] Exception:%#v", mcName, x))
+									}
+									wg.Done()
+								}()
+								//启动消费者协程
+								m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
+								err := mc.RunConsume(option)
+								if err != nil {
+									m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 								}
-								wg.Done()
-							}()
-							//启动消费者协程
-							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
-							err := mc.RunConsume(option)
-							if err != nil {
-								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
-							}
-							//休眠 10s 重试
-							time.Sleep(15 * time.Second)
-							return
-						}(wg)
-						wg.Wait()
-						m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
-					}
+								//休眠 10s 重试
+								time.Sleep(15 * time.Second)
+								return
+							}(wg)
+							wg.Wait()
+							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
+						}
+					}()
 				}
 			}(consume)
 		}
