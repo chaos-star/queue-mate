@@ -87,7 +87,7 @@ func (r Rabbit) NewClient() *Client {
 }
 
 type MessageProcessor interface {
-	Process([]byte) error
+	Process([]byte, Option) error
 }
 
 type Client struct {
