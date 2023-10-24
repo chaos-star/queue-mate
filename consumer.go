@@ -311,7 +311,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 					}
 				}()
 				for {
-					if err = c.proc.Process(msg.Body); err == nil {
+					if err = c.proc.Process(msg.Body, c.option); err == nil {
 						err = msg.Ack(true)
 						if err != nil {
 							c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, string(msg.Body), err.Error()))
