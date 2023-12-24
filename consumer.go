@@ -62,7 +62,7 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 
 	queue, err := ch.QueueDeclare(
 		queueName,
-		false,
+		true,
 		false,
 		false,
 		false,
