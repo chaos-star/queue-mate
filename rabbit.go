@@ -2,7 +2,6 @@ package mate
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"sync"
@@ -113,17 +112,19 @@ type Client struct {
 func (c *Client) connection() (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
-	c.connect = c.connections.Get(ctx)
-	if c.connect == nil || c.connect.Conn == nil {
-		err = errors.New("[MQ] [CONNECTION] Exception:Timeout")
-		return
-	}
+	for {
+		c.connect = c.connections.Get(ctx)
+		if c.connect == nil || c.connect.Conn == nil {
+			c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
+			continue
+		}
 
-	c.conn = c.connect.Conn.(*amqp.Connection)
-	if c.conn == nil {
-		message := "[MQ] [CONNECTION] Exception:Invalid Tcp resource"
-		c.log.Error(message)
-		err = errors.New(message)
+		c.conn = c.connect.Conn.(*amqp.Connection)
+		if c.conn == nil || c.conn.IsClosed() {
+			c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
+			continue
+		}
+		break
 	}
 
 	return
