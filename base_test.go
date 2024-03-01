@@ -32,8 +32,8 @@ func (t *TestConsume) RunConsume(option Option) (err error) {
 	return
 }
 
-func (t *TestConsume) Process(body []byte) (err error) {
-	fmt.Println("Test Running", string(body))
+func (t *TestConsume) Process(body []byte, option Option) (err error) {
+	fmt.Println("Test Running", string(body), option.Tag)
 	return
 }
 
