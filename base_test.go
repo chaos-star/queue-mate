@@ -1,19 +1,20 @@
 package mate
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 )
 
 var rabbit = NewRabbit(
-	"127.0.0.1",
+	"172.16.110.205",
 	5672,
-	"admin",
-	"admin",
+	"guest",
+	"2LrEN5tCHhY8k4gs",
 	"/multi",
 	30,
-	3,
-	10,
+	1,
+	30,
 	nil,
 )
 
@@ -28,12 +29,13 @@ func (t *TestConsume) GetOptions() []Option {
 
 func (t *TestConsume) RunConsume(option Option) (err error) {
 	client := rabbit.NewClient()
-	err = client.Use(t, option).Receive(client.Fanout, "ex_test_exchange", nil, "qx_test_queue")
+	err = client.Use(t, option).Retry(3).ConsumerNum(3).Receive(client.Fanout, "ex_test_exchange", nil, "qx_test_queue")
 	return
 }
 
 func (t *TestConsume) Process(body []byte, option Option) (err error) {
 	fmt.Println("Test Running", string(body), option.Tag)
+	err = errors.New("this is an error")
 	return
 }
 

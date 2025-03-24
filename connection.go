@@ -161,3 +161,11 @@ func (cp *ConnectionPool) Put(conn *Connection) {
 	cp.numIdle++
 	return
 }
+
+func (cp *ConnectionPool) Reset() {
+	if len(cp.waitConnections) > 1 {
+		cp.idleConnections = cp.idleConnections[1:]
+	} else {
+		cp.idleConnections = cp.idleConnections[0:0]
+	}
+}

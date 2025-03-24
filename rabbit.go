@@ -82,6 +82,7 @@ func (r Rabbit) NewClient() *Client {
 		Topic:       "topic",
 		Direct:      "direct",
 		Fanout:      "fanout",
+		consumerNum: 1,
 	}
 }
 
@@ -105,6 +106,8 @@ type Client struct {
 	wg          *sync.WaitGroup
 	timeout     time.Duration
 	retryNum    int
+	consumerNum int
+	queueAgain  bool
 	proc        MessageProcessor
 	log         Logger
 }
@@ -115,13 +118,16 @@ func (c *Client) connection() (err error) {
 	for {
 		c.connect = c.connections.Get(ctx)
 		if c.connect == nil || c.connect.Conn == nil {
-			c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
+			//c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
+			c.connections.Reset()
 			continue
 		}
 
 		c.conn = c.connect.Conn.(*amqp.Connection)
+
 		if c.conn == nil || c.conn.IsClosed() {
-			c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
+			//c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
+			c.connections.Reset()
 			continue
 		}
 		break
@@ -137,13 +143,25 @@ func (c *Client) Retry(num int) *Client {
 	return c
 }
 
-func (c *Client) Use(proc MessageProcessor, option Option) *Client {
-	c.proc = proc
-	c.option = option
+func (c *Client) ConsumerNum(num int) *Client {
+	if num > 0 {
+		c.consumerNum = num
+	}
+	return c
+}
+
+func (c *Client) QueueAgain() *Client {
+	c.queueAgain = true
 	return c
 }
 
 func (c *Client) UseOption(option Option) *Client {
+	c.option = option
+	return c
+}
+
+func (c *Client) Use(proc MessageProcessor, option Option) *Client {
+	c.proc = proc
 	c.option = option
 	return c
 }
