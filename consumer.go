@@ -35,6 +35,9 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 		}
 		//获取MQ对象
 		mcName := reflect.TypeOf(c.proc).Elem().Name()
+		if c.option.Tag != "" {
+			mcName = fmt.Sprintf("%s-%s", mcName, c.option.Tag)
+		}
 
 		//模式不对退出
 		if exchangeType != "topic" && exchangeType != "direct" && exchangeType != "fanout" {

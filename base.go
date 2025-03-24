@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
-	"time"
 )
 
 type MQConsume interface {
@@ -37,48 +36,36 @@ func (m *MQBase) Run() {
 		if m.log == nil {
 			m.log = new(ConsoleOutput)
 		}
+
 		for _, consume := range m.consumes {
+			fmt.Println(fmt.Sprintf("consume:%v", consume.GetOptions()))
 			//消费者MQ对象主协程
-			options := consume.GetOptions()
-			if len(options) <= 0 {
-				options = append(options, Option{"", nil})
-			}
-			for _, option := range options {
-				go func(mc MQConsume, op Option) {
-					//断开重试逻辑
-					var (
-						wg     = &sync.WaitGroup{}
-						mcName = reflect.TypeOf(mc).Elem().Name()
-					)
-					if op.Tag != "" {
-						mcName = fmt.Sprintf("%s-%s", mcName, op.Tag)
+			go func(mc MQConsume) {
+				var consumeWg = &sync.WaitGroup{}
+				for {
+					options := consume.GetOptions()
+					if len(options) <= 0 {
+						options = append(options, Option{"", nil})
 					}
-					for {
-						wg.Add(1)
-						//消费者子协程Panic,Err 退出后重启
-						go func(wg *sync.WaitGroup) {
-							defer func() {
-								//处理Panic
-								if x := recover(); x != nil {
-									m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] [RUN] Exception:%#v", mcName, x))
-								}
-								wg.Done()
-							}()
-							//启动消费者协程
+					for _, option := range options {
+						consumeWg.Add(1)
+						go func(mc MQConsume, op Option, wg *sync.WaitGroup) {
+							defer wg.Done()
+							//断开重试逻辑
+							var mcName = reflect.TypeOf(mc).Elem().Name()
+							if op.Tag != "" {
+								mcName = fmt.Sprintf("%s-%s", mcName, op.Tag)
+							}
 							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
-							err := mc.RunConsume(op)
-							if err != nil {
+							if err := mc.RunConsume(op); err != nil {
 								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 							}
-							//休眠 10s 重试
-							time.Sleep(15 * time.Second)
-							return
-						}(wg)
-						wg.Wait()
-						m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
+						}(consume, option, consumeWg)
 					}
-				}(consume, option)
-			}
+					consumeWg.Wait()
+				}
+			}(consume)
+
 		}
 		fmt.Println("MQ Queue Run Success, press CTRL + C exit.")
 		if m.blocking {

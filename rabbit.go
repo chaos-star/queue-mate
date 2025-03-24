@@ -82,6 +82,7 @@ func (r Rabbit) NewClient() *Client {
 		Topic:       "topic",
 		Direct:      "direct",
 		Fanout:      "fanout",
+		consumerNum: 1,
 	}
 }
 
@@ -155,6 +156,12 @@ func (c *Client) QueueAgain() *Client {
 }
 
 func (c *Client) UseOption(option Option) *Client {
+	c.option = option
+	return c
+}
+
+func (c *Client) Use(proc MessageProcessor, option Option) *Client {
+	c.proc = proc
 	c.option = option
 	return c
 }
