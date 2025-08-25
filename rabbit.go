@@ -3,9 +3,10 @@ package mate
 import (
 	"context"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"sync"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type ExType string
@@ -115,13 +116,13 @@ func (c *Client) connection() (err error) {
 	for {
 		c.connect = c.connections.Get(ctx)
 		if c.connect == nil || c.connect.Conn == nil {
-			c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
+			//c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
 			continue
 		}
 
 		c.conn = c.connect.Conn.(*amqp.Connection)
 		if c.conn == nil || c.conn.IsClosed() {
-			c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
+			//c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
 			continue
 		}
 		break

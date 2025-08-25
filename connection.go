@@ -52,7 +52,7 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 			if conn.expired() {
 				if conn.Conn != nil {
 					if err := cp.Close(conn.Conn); err != nil {
-						cp.log.Error(fmt.Sprintf("[MQ] [CONNECTION] [CLOSE] Index:%d, Exception:%s", i, err.Error()))
+						// cp.log.Error(fmt.Sprintf("[MQ] [CONNECTION] [CLOSE] Index:%d, Exception:%s", i, err.Error()))
 						//关闭3次仍未关闭则属于僵尸连接，忽略此链接，丢出连接池
 						if i < 3 {
 							i++
