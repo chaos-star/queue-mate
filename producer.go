@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey string, body []byte, options ...interface{}) (err error) {
+func (c *Client) Publish(exchangeType ExType, exchangeName string, routeKey string, body []byte, options ...interface{}) (err error) {
 	var (
 		ch *amqp.Channel
 	)
@@ -18,12 +19,12 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 	}
 	defer c.connections.Put(c.connect)
 
-	if exhangeType != "topic" && exhangeType != "direct" && exhangeType != "fanout" {
+	if exchangeType != "topic" && exchangeType != "direct" && exchangeType != "fanout" {
 		err = errors.New("other modes are not supported")
 		return
 	}
 
-	if exchangeName == "fanout" {
+	if exchangeType == "fanout" {
 		routeKey = ""
 	}
 
@@ -36,7 +37,7 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 
 	err = ch.ExchangeDeclare(
 		exchangeName,
-		string(exhangeType),
+		string(exchangeType),
 		true,
 		false,
 		false,
@@ -54,8 +55,8 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 	var msg amqp.Publishing
 	msg.ContentType = "text/plain"
 	msg.Body = body
-	if len(options) > 0 && options[0].(int) > 0 {
-		if expire, ok := options[0].(int); ok {
+	if len(options) > 0 {
+		if expire, ok := options[0].(int); ok && expire > 0 {
 			msg.Expiration = fmt.Sprintf("%d", expire*1000)
 		}
 	}
@@ -68,10 +69,6 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 		msg,
 	)
 
-	if c.option.Tag != "" {
-		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [%s] [MSG] %s", c.option.Tag, exchangeName, routeKey, string(body)))
-	} else {
-		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [MSG] %s", exchangeName, routeKey, string(body)))
-	}
+	c.log.Info(fmt.Sprintf("[MQ] [PRODUCER] [%s] [%s] [MSG] %s", exchangeName, routeKey, string(body)))
 	return
 }

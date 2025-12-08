@@ -3,9 +3,10 @@ package mate
 import (
 	"context"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"sync"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type ExType string
@@ -23,23 +24,18 @@ type Rabbit struct {
 	connections *ConnectionPool
 }
 
-type Option struct {
-	Tag  string
-	Args interface{}
-}
-
-func NewRabbit(host string, port int, username, password, vhost string, maxIdle int, maxLifeTime time.Duration, timeout time.Duration, logger Logger) *Rabbit {
+func NewRabbit(host string, port int, username, password, vhost string, maxIdle int, maxLifeTimeHours int, timeoutSeconds int, logger Logger) *Rabbit {
 	if logger == nil {
 		logger = new(ConsoleOutput)
 	}
 	if maxIdle <= 0 {
 		maxIdle = 10
 	}
-	if maxLifeTime <= 0 {
-		maxLifeTime = time.Duration(1)
+	if maxLifeTimeHours <= 0 {
+		maxLifeTimeHours = 1
 	}
-	if timeout <= 0 {
-		timeout = time.Duration(10)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 10
 	}
 	var mq = &Rabbit{
 		host:        host,
@@ -49,8 +45,8 @@ func NewRabbit(host string, port int, username, password, vhost string, maxIdle 
 		vhost:       vhost,
 		log:         logger,
 		maxIdle:     maxIdle,
-		maxLifeTime: maxLifeTime * time.Hour,
-		timeout:     timeout * time.Second,
+		maxLifeTime: time.Duration(maxLifeTimeHours) * time.Hour,
+		timeout:     time.Duration(timeoutSeconds) * time.Second,
 	}
 
 	mq.connections = &ConnectionPool{
@@ -58,13 +54,19 @@ func NewRabbit(host string, port int, username, password, vhost string, maxIdle 
 		MaxIdle:     mq.maxIdle,
 		MaxLifeTime: mq.maxLifeTime,
 		Close: func(conn interface{}) error {
-			return conn.(*amqp.Connection).Close()
+			if amqpConn, ok := conn.(*amqp.Connection); ok {
+				return amqpConn.Close()
+			}
+			return fmt.Errorf("invalid connection type")
 		},
 		NewFunc: func() interface{} {
 			config := fmt.Sprintf("amqp://%s:%s@%s:%d%s", mq.username, mq.password, mq.host, mq.port, mq.vhost)
 			conn, err := amqp.Dial(config)
 			if err != nil {
-				mq.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Exception:%s, conf:%s", err.Error(), config))
+				// 避免在日志中暴露密码
+				safeConfig := fmt.Sprintf("amqp://%s:***@%s:%d%s", mq.username, mq.host, mq.port, mq.vhost)
+				mq.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Exception:%s, conf:%s", err.Error(), safeConfig))
+				return nil
 			}
 			return conn
 		},
@@ -87,7 +89,7 @@ func (r Rabbit) NewClient() *Client {
 }
 
 type MessageProcessor interface {
-	Process([]byte, Option) error
+	Process([]byte) error
 }
 
 type Client struct {
@@ -96,7 +98,6 @@ type Client struct {
 	username    string
 	password    string
 	vhost       string
-	option      Option
 	Topic       ExType
 	Direct      ExType
 	Fanout      ExType
@@ -107,7 +108,6 @@ type Client struct {
 	timeout     time.Duration
 	retryNum    int
 	consumerNum int
-	queueAgain  bool
 	proc        MessageProcessor
 	log         Logger
 }
@@ -123,9 +123,15 @@ func (c *Client) connection() (err error) {
 			continue
 		}
 
-		c.conn = c.connect.Conn.(*amqp.Connection)
+		var ok bool
+		c.conn, ok = c.connect.Conn.(*amqp.Connection)
+		if !ok || c.conn == nil {
+			//c.log.Info("[MQ] [CONNECTION] Invalid Connection Type Retry")
+			c.connections.Reset()
+			continue
+		}
 
-		if c.conn == nil || c.conn.IsClosed() {
+		if c.conn.IsClosed() {
 			//c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
 			c.connections.Reset()
 			continue
@@ -150,18 +156,7 @@ func (c *Client) ConsumerNum(num int) *Client {
 	return c
 }
 
-func (c *Client) QueueAgain() *Client {
-	c.queueAgain = true
-	return c
-}
-
-func (c *Client) UseOption(option Option) *Client {
-	c.option = option
-	return c
-}
-
-func (c *Client) Use(proc MessageProcessor, option Option) *Client {
+func (c *Client) Use(proc MessageProcessor) *Client {
 	c.proc = proc
-	c.option = option
 	return c
 }

@@ -4,17 +4,18 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 )
 
 type MQConsume interface {
-	RunConsume(Option) error
-	GetOptions() []Option
+	RunConsume() error
 }
 
 type MQBase struct {
 	consumes []MQConsume
 	log      Logger
 	blocking bool
+	mu       sync.Mutex
 }
 
 func (m *MQBase) With(log Logger) *MQBase {
@@ -28,6 +29,8 @@ func (m *MQBase) Blocking() *MQBase {
 }
 
 func (m *MQBase) Add(consumes ...MQConsume) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.consumes = append(m.consumes, consumes...)
 }
 
@@ -36,36 +39,44 @@ func (m *MQBase) Run() {
 		if m.log == nil {
 			m.log = new(ConsoleOutput)
 		}
-
 		for _, consume := range m.consumes {
-			fmt.Println(fmt.Sprintf("consume:%v", consume.GetOptions()))
 			//消费者MQ对象主协程
 			go func(mc MQConsume) {
-				var consumeWg = &sync.WaitGroup{}
+				//断开重试逻辑
+				var (
+					wg     = &sync.WaitGroup{}
+					mcType = reflect.TypeOf(mc)
+				)
+				var mcName string
+				if mcType.Kind() == reflect.Ptr {
+					mcName = mcType.Elem().Name()
+				} else {
+					mcName = mcType.Name()
+				}
 				for {
-					options := consume.GetOptions()
-					if len(options) <= 0 {
-						options = append(options, Option{"", nil})
-					}
-					for _, option := range options {
-						consumeWg.Add(1)
-						go func(mc MQConsume, op Option, wg *sync.WaitGroup) {
-							defer wg.Done()
-							//断开重试逻辑
-							var mcName = reflect.TypeOf(mc).Elem().Name()
-							if op.Tag != "" {
-								mcName = fmt.Sprintf("%s-%s", mcName, op.Tag)
+					wg.Add(1)
+					//消费者子协程Panic,Err 退出后重启
+					go func(wg *sync.WaitGroup) {
+						defer func() {
+							//处理Panic
+							if x := recover(); x != nil {
+								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] [RUN] Exception:%#v", mcName, x))
 							}
-							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
-							if err := mc.RunConsume(op); err != nil {
-								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
-							}
-						}(consume, option, consumeWg)
-					}
-					consumeWg.Wait()
+							wg.Done()
+						}()
+						//启动消费者协程
+						err := mc.RunConsume()
+						if err != nil {
+							m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+						}
+						return
+					}(wg)
+					wg.Wait()
+					//休眠 10s 重试
+					time.Sleep(15 * time.Second)
+					m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
 				}
 			}(consume)
-
 		}
 		fmt.Println("MQ Queue Run Success, press CTRL + C exit.")
 		if m.blocking {

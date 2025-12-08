@@ -1,7 +1,19 @@
 ### QueueMate
-基于Rabbit MQ的消息队列助手 
+基于Rabbit MQ的消息队列助手
 
-##### 1. 初始化
+
+##### 1. 开始
+``` shell
+# 添加私有仓库规则
+go env -w GOPRIVATE="git.tghzs.net/common/*,git.jinglewill.com/common/*"  
+
+# 获取依赖
+go mod edit -replace=git.tghzs.net/common/queue-mate@v1.0.0=git.jinglewill.com/common/queue-mate@v1.0.0
+go get git.tghzs.net/common/queue-mate
+
+```
+
+##### 2. 初始化
 
 ```go
 

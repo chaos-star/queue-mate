@@ -1,4 +1,4 @@
-module github.com/chaos-star/queue-mate
+module git.tghzs.net/common/queue-mate
 
 go 1.17
 

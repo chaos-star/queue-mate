@@ -13,7 +13,7 @@ type Connection struct {
 }
 
 func (c *Connection) expired() (flag bool) {
-	if c.expire.Sub(time.Now()) <= 0 {
+	if time.Now().After(c.expire) {
 		flag = true
 	}
 	return
@@ -49,7 +49,7 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 				break
 			}
 			conn = cp.idleConnections[0]
-			if conn.expired() {
+			if conn != nil && conn.expired() {
 				if conn.Conn != nil {
 					if err := cp.Close(conn.Conn); err != nil {
 						cp.log.Error(fmt.Sprintf("[MQ] [CONNECTION] [CLOSE] Index:%d, Exception:%s", i, err.Error()))
@@ -83,7 +83,13 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 	//如果还有剩余坐席
 	if cp.numOpen+cp.numIdle < cp.MaxIdle {
 		temp := Connection{}
-		temp.Conn = cp.NewFunc()
+		newConn := cp.NewFunc()
+		if newConn == nil {
+			// 连接创建失败，需要重试或返回错误
+			cp.lock.Unlock()
+			return nil
+		}
+		temp.Conn = newConn
 		temp.expire = time.Now().Add(cp.MaxLifeTime)
 		conn = &temp
 		cp.numOpen++
@@ -103,34 +109,30 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 				break
 			}
 		}
-		//如果在此瞬间返回了连接则销毁或者回收
-		select {
-		default:
-		case xConn := <-req:
-			if xConn.expired() {
-				err := cp.Close(xConn.Conn)
-				if err != nil {
-					cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Stop Or Timeout Close Exception:%s", err.Error()))
-				}
-				cp.numOpen--
-			} else {
-				cp.idleConnections = append(cp.idleConnections, xConn)
-			}
-		}
 		close(req)
 		cp.lock.Unlock()
 	case xConn := <-req:
-		if xConn.expired() {
-			err := cp.Close(xConn.Conn)
-			if err != nil {
-				cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Wait Close Exception:%s", err.Error()))
+		if xConn != nil {
+			if xConn.expired() {
+				if xConn.Conn != nil {
+					err := cp.Close(xConn.Conn)
+					if err != nil {
+						cp.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Wait Close Exception:%s", err.Error()))
+					}
+				}
+				temp := Connection{}
+				newConn := cp.NewFunc()
+				if newConn == nil {
+					// 连接创建失败
+					close(req)
+					return nil
+				}
+				temp.Conn = newConn
+				temp.expire = time.Now().Add(cp.MaxLifeTime)
+				conn = &temp
+			} else {
+				conn = xConn
 			}
-			temp := Connection{}
-			temp.Conn = cp.NewFunc()
-			temp.expire = time.Now().Add(cp.MaxLifeTime)
-			conn = &temp
-		} else {
-			conn = xConn
 		}
 		close(req)
 		return
@@ -153,7 +155,7 @@ func (cp *ConnectionPool) Put(conn *Connection) {
 	if cp.numIdle+cp.numOpen >= cp.MaxIdle {
 		err := cp.Close(conn.Conn)
 		if err != nil {
-			cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Put Close Exception:%s", err.Error()))
+			cp.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Put Close Exception:%s", err.Error()))
 		}
 		return
 	}
@@ -161,11 +163,10 @@ func (cp *ConnectionPool) Put(conn *Connection) {
 	cp.numIdle++
 	return
 }
-
 func (cp *ConnectionPool) Reset() {
-	if len(cp.waitConnections) > 1 {
-		cp.idleConnections = cp.idleConnections[1:]
-	} else {
-		cp.idleConnections = cp.idleConnections[0:0]
-	}
+	cp.lock.Lock()
+	defer cp.lock.Unlock()
+	// 清空所有空闲连接
+	cp.idleConnections = cp.idleConnections[0:0]
+	cp.numIdle = 0
 }
