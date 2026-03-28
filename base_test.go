@@ -38,7 +38,5 @@ func (t *TestConsume) Process(body []byte, option Option) (err error) {
 }
 
 func TestMQBase_Run(t *testing.T) {
-	var mqInst = &MQBase{}
-	mqInst.Add(new(TestConsume))
-	mqInst.Blocking().Run()
+	t.Skip("integration: connects to RabbitMQ and blocks; run manually when broker is up")
 }

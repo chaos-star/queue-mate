@@ -2,6 +2,7 @@ package mate
 
 import (
 	"fmt"
+	"math/rand"
 	"reflect"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ type MQBase struct {
 	consumes []MQConsume
 	log      Logger
 	blocking bool
+	supLog   logThrottle
 }
 
 func (m *MQBase) With(log Logger) *MQBase {
@@ -65,17 +67,23 @@ func (m *MQBase) Run() {
 								wg.Done()
 							}()
 							//启动消费者协程
-							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
+							if m.supLog.allow(mcName+":running", mqReconnectLogInterval) {
+								m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Running...", mcName))
+							}
 							err := mc.RunConsume(op)
 							if err != nil {
-								m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+								if m.supLog.allow(mcName+":exception", mqReconnectLogInterval) {
+									m.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+								}
 							}
-							//休眠 10s 重试
-							time.Sleep(15 * time.Second)
-							return
+							base := 15 * time.Second
+							jitter := time.Duration(rand.Int63n(5000000000))
+							time.Sleep(base + jitter)
 						}(wg)
 						wg.Wait()
-						m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
+						if m.supLog.allow(mcName+":restart", mqReconnectLogInterval) {
+							m.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] Restart...", mcName))
+						}
 					}
 				}(consume, option)
 			}

@@ -16,14 +16,14 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 	if err != nil {
 		return
 	}
-	defer c.connections.Put(c.connect)
+	defer c.deferReturnConnection()
 
 	if exhangeType != "topic" && exhangeType != "direct" && exhangeType != "fanout" {
 		err = errors.New("other modes are not supported")
 		return
 	}
 
-	if exchangeName == "fanout" {
+	if exhangeType == c.Fanout {
 		routeKey = ""
 	}
 
@@ -54,8 +54,8 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 	var msg amqp.Publishing
 	msg.ContentType = "text/plain"
 	msg.Body = body
-	if len(options) > 0 && options[0].(int) > 0 {
-		if expire, ok := options[0].(int); ok {
+	if len(options) > 0 {
+		if expire, ok := options[0].(int); ok && expire > 0 {
 			msg.Expiration = fmt.Sprintf("%d", expire*1000)
 		}
 	}
@@ -68,10 +68,11 @@ func (c *Client) Publish(exhangeType ExType, exchangeName string, routeKey strin
 		msg,
 	)
 
+	preview := truncateBodyForLog(body)
 	if c.option.Tag != "" {
-		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [%s] [MSG] %s", c.option.Tag, exchangeName, routeKey, string(body)))
+		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [%s] [MSG] %s", c.option.Tag, exchangeName, routeKey, preview))
 	} else {
-		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [MSG] %s", exchangeName, routeKey, string(body)))
+		c.log.Info(fmt.Sprintf("[MQ] [PRODUCTER] [%s] [%s] [MSG] %s", exchangeName, routeKey, preview))
 	}
 	return
 }

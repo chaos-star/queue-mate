@@ -3,6 +3,9 @@ package mate
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,6 +25,7 @@ type Rabbit struct {
 	timeout     time.Duration
 	log         Logger
 	connections *ConnectionPool
+	dialLog     logThrottle
 }
 
 type Option struct {
@@ -62,10 +66,27 @@ func NewRabbit(host string, port int, username, password, vhost string, maxIdle 
 			return conn.(*amqp.Connection).Close()
 		},
 		NewFunc: func() interface{} {
-			config := fmt.Sprintf("amqp://%s:%s@%s:%d%s", mq.username, mq.password, mq.host, mq.port, mq.vhost)
-			conn, err := amqp.Dial(config)
+			path := mq.vhost
+			if path == "" {
+				path = "/"
+			}
+			u := &url.URL{
+				Scheme: "amqp",
+				User:   url.UserPassword(mq.username, mq.password),
+				Host:   net.JoinHostPort(mq.host, strconv.Itoa(mq.port)),
+				Path:   path,
+			}
+			uri := u.String()
+			cfg := amqp.Config{
+				Heartbeat: 30 * time.Second,
+				Locale:    "en_US",
+			}
+			conn, err := amqp.DialConfig(uri, cfg)
 			if err != nil {
-				mq.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Exception:%s, conf:%s", err.Error(), config))
+				if mq.dialLog.allow("dial", mqReconnectLogInterval) {
+					endpoint := net.JoinHostPort(mq.host, strconv.Itoa(mq.port))
+					mq.log.Error(fmt.Sprintf("[MQ] [CONNECTION] Exception:%s, endpoint:%s vhost:%s", err.Error(), endpoint, mq.vhost))
+				}
 			}
 			return conn
 		},
@@ -108,27 +129,36 @@ type Client struct {
 	retryNum    int
 	proc        MessageProcessor
 	log         Logger
+	sessDiscLog logThrottle
 }
 
 func (c *Client) connection() (err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
-	defer cancel()
-	for {
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			d := 200 * time.Millisecond
+			if attempt > 5 {
+				d = 2 * time.Second
+			}
+			time.Sleep(d)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 		c.connect = c.connections.Get(ctx)
+		cancel()
+
 		if c.connect == nil || c.connect.Conn == nil {
-			//c.log.Info("[MQ] [CONNECTION] Invalid Tcp Resource Retry")
 			continue
 		}
 
-		c.conn = c.connect.Conn.(*amqp.Connection)
-		if c.conn == nil || c.conn.IsClosed() {
-			//c.log.Info("[MQ] [CONNECTION] Closed Tcp Resource Retry")
+		ac, ok := c.connect.Conn.(*amqp.Connection)
+		if !ok || ac == nil || ac.IsClosed() {
+			c.connections.Discard(c.connect)
+			c.connect = nil
+			c.conn = nil
 			continue
 		}
-		break
+		c.conn = ac
+		return nil
 	}
-
-	return
 }
 
 func (c *Client) Retry(num int) *Client {

@@ -30,6 +30,7 @@ type ConnectionPool struct {
 	MaxIdle         int
 	NewFunc         func() interface{}
 	Close           func(interface{}) error
+	opLog           logThrottle
 }
 
 func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
@@ -109,7 +110,7 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 		case xConn := <-req:
 			if xConn.expired() {
 				err := cp.Close(xConn.Conn)
-				if err != nil {
+				if err != nil && cp.opLog.allow("stop_timeout_close", mqReconnectLogInterval) {
 					cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Stop Or Timeout Close Exception:%s", err.Error()))
 				}
 				cp.numOpen--
@@ -122,7 +123,7 @@ func (cp *ConnectionPool) Get(ctx context.Context) (conn *Connection) {
 	case xConn := <-req:
 		if xConn.expired() {
 			err := cp.Close(xConn.Conn)
-			if err != nil {
+			if err != nil && cp.opLog.allow("wait_close", mqReconnectLogInterval) {
 				cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Wait Close Exception:%s", err.Error()))
 			}
 			temp := Connection{}
@@ -152,7 +153,7 @@ func (cp *ConnectionPool) Put(conn *Connection) {
 	cp.numOpen--
 	if cp.numIdle+cp.numOpen >= cp.MaxIdle {
 		err := cp.Close(conn.Conn)
-		if err != nil {
+		if err != nil && cp.opLog.allow("put_close", mqReconnectLogInterval) {
 			cp.log.Info(fmt.Sprintf("[MQ] [CONNECTION] Put Close Exception:%s", err.Error()))
 		}
 		return
@@ -160,4 +161,21 @@ func (cp *ConnectionPool) Put(conn *Connection) {
 	cp.idleConnections = append(cp.idleConnections, conn)
 	cp.numIdle++
 	return
+}
+
+// Discard closes the connection and decrements the in-use count. Use when the
+// connection is no longer valid instead of Put (e.g. after broker disconnect).
+func (cp *ConnectionPool) Discard(conn *Connection) {
+	if conn == nil {
+		return
+	}
+	cp.lock.Lock()
+	defer cp.lock.Unlock()
+	if conn.Conn != nil {
+		_ = cp.Close(conn.Conn)
+		conn.Conn = nil
+	}
+	if cp.numOpen > 0 {
+		cp.numOpen--
+	}
 }

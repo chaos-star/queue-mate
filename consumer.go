@@ -3,20 +3,117 @@ package mate
 import (
 	"errors"
 	"fmt"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"reflect"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+const maxLogBody = 512
+
+func truncateBodyForLog(b []byte) string {
+	if len(b) <= maxLogBody {
+		return string(b)
+	}
+	return string(b[:maxLogBody]) + "...(truncated)"
+}
+
+func (c *Client) runDeliveryLoop(messages <-chan amqp.Delivery, mcName string) {
+	var num int
+	for msg := range messages {
+		preview := truncateBodyForLog(msg.Body)
+		c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] [MSG] Message:%s", mcName, preview))
+		c.wg.Add(1)
+		go func(l, n *int, m amqp.Delivery) {
+			defer func() {
+				c.wg.Done()
+				if x := recover(); x != nil {
+					_ = m.Ack(true)
+					exception := fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] Msg:%s, Exception:%#v", mcName, truncateBodyForLog(m.Body), x)
+					c.log.Error(exception)
+				}
+			}()
+			for {
+				if err := c.proc.Process(m.Body, c.option); err == nil {
+					if ackErr := m.Ack(true); ackErr != nil {
+						c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, truncateBodyForLog(m.Body), ackErr.Error()))
+					}
+					*n = 0
+					break
+				} else {
+					c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PROCESS] Message:%s, Exception:%s, RunTimes:%d", mcName, truncateBodyForLog(m.Body), err.Error(), *n+1))
+					if *n < *l {
+						*n++
+						continue
+					} else {
+						*n = 0
+						if ackErr := m.Ack(true); ackErr != nil {
+							c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, truncateBodyForLog(m.Body), ackErr.Error()))
+						}
+						break
+					}
+				}
+			}
+		}(&c.retryNum, &num, msg)
+		c.wg.Wait()
+	}
+}
+
+func (c *Client) waitConsumeSession(mcName string, conn *amqp.Connection, ch *amqp.Channel, messages <-chan amqp.Delivery) error {
+	connClose := conn.NotifyClose(make(chan *amqp.Error, 1))
+	chClose := ch.NotifyClose(make(chan *amqp.Error, 1))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.runDeliveryLoop(messages, mcName)
+	}()
+
+	select {
+	case <-done:
+		if c.sessDiscLog.allow(mcName, mqReconnectLogInterval) {
+			c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] deliveries ended, will reconnect", mcName))
+		}
+	case amqpErr := <-connClose:
+		if !c.sessDiscLog.allow(mcName, mqReconnectLogInterval) {
+			break
+		}
+		if amqpErr != nil {
+			c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] connection closed: %v", mcName, amqpErr))
+		} else {
+			c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] connection closed", mcName))
+		}
+	case amqpErr := <-chClose:
+		if !c.sessDiscLog.allow(mcName, mqReconnectLogInterval) {
+			break
+		}
+		if amqpErr != nil {
+			c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] channel closed: %v", mcName, amqpErr))
+		} else {
+			c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] channel closed", mcName))
+		}
+	}
+
+	return errors.New("mq consumer session ended")
+}
+
+func (c *Client) deferReturnConnection() {
+	if c.connect == nil {
+		return
+	}
+	if c.conn != nil && !c.conn.IsClosed() {
+		c.connections.Put(c.connect)
+	} else {
+		c.connections.Discard(c.connect)
+	}
+}
+
 func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []string, queueName string) (err error) {
-	var (
-		ch *amqp.Channel
-	)
+	var ch *amqp.Channel
 
 	err = c.connection()
 	if err != nil {
 		return
 	}
-	defer c.connections.Put(c.connect)
+	defer c.deferReturnConnection()
 
 	if c.proc == nil {
 		err = errors.New("please implement the processing method")
@@ -90,6 +187,13 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 		}
 	}
 
+	err = ch.Qos(1, 0, false)
+	if err != nil {
+		err = errors.New(fmt.Sprintf("failed to set qos %s", err.Error()))
+		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+		return
+	}
+
 	messages, err := ch.Consume(
 		queue.Name,
 		"",
@@ -104,54 +208,8 @@ func (c *Client) Receive(exchangeType ExType, exchangeName string, routeKeys []s
 		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 		return
 	}
-	var forever chan struct{}
-	go func() {
-		var (
-			num int
-		)
-		for msg := range messages {
-			c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] [MSG] Message:%s", mcName, string(msg.Body)))
-			c.wg.Add(1)
-			go func(l, n *int) {
-				defer func() {
-					c.wg.Done()
-					if x := recover(); x != nil {
-						err = msg.Ack(true)
-						Exception := fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] Msg:%s, Exception:%#v", mcName, string(msg.Body), x)
-						c.log.Error(Exception)
-					}
-				}()
-				for {
-					if err = c.proc.Process(msg.Body, c.option); err == nil {
-						err = msg.Ack(true)
-						if err != nil {
-							c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, string(msg.Body), err.Error()))
-						}
-						*n = 0
-						break
-					} else {
-						c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PROCESS] Message:%s, Exception:%s, RunTimes:%d", mcName, string(msg.Body), err.Error(), *n+1))
-						if *n < *l {
-							*n++
-							continue
-						} else {
-							*n = 0
-							err = msg.Ack(true)
-							if err != nil {
-								c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, string(msg.Body), err.Error()))
-							}
-							break
-						}
-					}
-				}
-			}(&c.retryNum, &num)
-			c.wg.Wait()
-		}
-	}()
 
-	<-forever
-
-	return
+	return c.waitConsumeSession(mcName, c.conn, ch, messages)
 }
 
 func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKeys []string, queueName string) (err error) {
@@ -165,7 +223,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 	if err != nil {
 		return
 	}
-	defer c.connections.Put(c.connect)
+	defer c.deferReturnConnection()
 
 	if c.proc == nil {
 		err = errors.New("please implement the processing method")
@@ -191,7 +249,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		return
 	}
 	defer ch.Close()
-	//业务交换机
+
 	err = ch.ExchangeDeclare(
 		exchangeName,
 		string(exchangeType),
@@ -207,7 +265,6 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		return
 	}
 
-	//死信交换机
 	err = ch.ExchangeDeclare(
 		deadExchangeName,
 		string(exchangeType),
@@ -225,7 +282,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 
 	var args = make(amqp.Table)
 	args["x-dead-letter-exchange"] = deadExchangeName
-	//业务队列
+
 	queue, err := ch.QueueDeclare(
 		queueName,
 		false,
@@ -239,7 +296,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 		return
 	}
-	//死信队列
+
 	deadQueue, err := ch.QueueDeclare(
 		deadQueueName,
 		false,
@@ -254,7 +311,7 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
 		return
 	}
-	//绑定死信队列
+
 	err = ch.QueueBind(
 		deadQueue.Name,
 		"",
@@ -283,6 +340,13 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		}
 	}
 
+	err = ch.Qos(1, 0, false)
+	if err != nil {
+		err = errors.New(fmt.Sprintf("failed to set qos %s", err.Error()))
+		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+		return
+	}
+
 	messages, err := ch.Consume(
 		deadQueue.Name,
 		"",
@@ -292,53 +356,11 @@ func (c *Client) DelayReceive(exchangeType ExType, exchangeName string, routeKey
 		false,
 		nil,
 	)
-	var forever chan struct{}
-	go func() {
-		var (
-			num int
-		)
-		for msg := range messages {
-			c.log.Info(fmt.Sprintf("[MQ] [CONSUMER] [%s] [MSG] Message:%s", mcName, string(msg.Body)))
-			c.wg.Add(1)
-			go func(l, n *int) {
-				defer func() {
-					c.wg.Done()
-					if x := recover(); x != nil {
-						err = msg.Ack(true)
-						Exception := fmt.Sprintf("[MQ] [CONSUMER] [%s] [PANIC] Msg:%s, Exception:%#v", mcName, string(msg.Body), x)
-						c.log.Error(Exception)
-						fmt.Println(Exception)
-					}
-				}()
-				for {
-					if err = c.proc.Process(msg.Body, c.option); err == nil {
-						err = msg.Ack(true)
-						if err != nil {
-							c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, string(msg.Body), err.Error()))
-						}
-						*n = 0
-						break
-					} else {
-						c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [PROCESS] Message:%s, Exception:%s, RunTimes:%d", mcName, string(msg.Body), err.Error(), *n+1))
-						if *n < *l {
-							*n++
-							continue
-						} else {
-							*n = 0
-							err = msg.Ack(true)
-							if err != nil {
-								c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] [ACK] Message:%s, Exception:%s", mcName, string(msg.Body), err.Error()))
-							}
-							break
-						}
-					}
-				}
-			}(&c.retryNum, &num)
-			c.wg.Wait()
-		}
-	}()
+	if err != nil {
+		err = errors.New(fmt.Sprintf("failed to consume %s", err.Error()))
+		c.log.Error(fmt.Sprintf("[MQ] [CONSUMER] [%s] Exception:%s", mcName, err.Error()))
+		return
+	}
 
-	<-forever
-
-	return
+	return c.waitConsumeSession(mcName, c.conn, ch, messages)
 }
